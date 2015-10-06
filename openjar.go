@@ -6,6 +6,7 @@ import (
 	"encoding/gob"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -42,19 +43,28 @@ func (jar *OpenJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
 // StoreCookies saves cookies in map. map key is deduced from url
 func (jar *OpenJar) UpdateStore(u *url.URL) {
 	key := jar.urlKey(u)
+	// have error don't store
+	if key == "" {
+		return
+	}
 	jar.Store[key] = jar.Jar.Cookies(u)
 }
 
 // urlKey creates key from an url.URL for map storate.
-// only scheme and host will be used in CookieJar's SetCookies method.
+// jar key only use host. (because go's cookie Jar does
+// like this
 func (jar *OpenJar) urlKey(u *url.URL) string {
-	return fmt.Sprintf("%s|%s", u.Scheme, u.Host)
+	host, err := canonicalHost(u.Host)
+	if err != nil {
+		return ""
+	}
+	return host
 }
 
 // urlFromKey decode keys to *url.URL so that it can be used for http.CookieJar
 func (jar *OpenJar) urlFromKey(key string) *url.URL {
-	fields := strings.Split(key, "|")
-	return &url.URL{Scheme: fields[0], Host: fields[1]}
+	scheme := "https"
+	return &url.URL{Scheme: scheme, Host: key}
 }
 
 // FillJar puts all cookies from map into the internal Jar.
@@ -106,8 +116,9 @@ func (jar *OpenJar) String() string {
 		buf       bytes.Buffer
 		cookieCnt int
 	)
-	for key, cookies := range jar.Store {
+	for key, _ := range jar.Store {
 		u = jar.urlFromKey(key)
+		cookies := jar.Jar.Cookies(u)
 		cookieCnt = len(cookies)
 		fmt.Fprintf(&buf, "Cookies for %s\n", u.Host)
 		fmt.Fprintf(&buf, "Cookie count: %d\n", cookieCnt)
@@ -122,4 +133,35 @@ func (jar *OpenJar) String() string {
 		}
 	}
 	return buf.String()
+}
+
+// canonicalHost strips port from host if present and returns the canonicalized
+// host name.
+func canonicalHost(host string) (string, error) {
+	var err error
+	host = strings.ToLower(host)
+	if hasPort(host) {
+		host, _, err = net.SplitHostPort(host)
+		if err != nil {
+			return "", err
+		}
+	}
+	if strings.HasSuffix(host, ".") {
+		// Strip trailing dot from fully qualified domain names.
+		host = host[:len(host)-1]
+	}
+	return host, nil
+}
+
+// hasPort reports whether host contains a port number. host may be a host
+// name, an IPv4 or an IPv6 address.
+func hasPort(host string) bool {
+	colons := strings.Count(host, ":")
+	if colons == 0 {
+		return false
+	}
+	if colons == 1 {
+		return true
+	}
+	return host[0] == '[' && strings.Contains(host, "]:")
 }
